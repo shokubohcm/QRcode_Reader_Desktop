@@ -4,10 +4,11 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton,
 from PySide6.QtCore import Qt, QRect, Signal, QBuffer, QByteArray
 from PySide6.QtGui import QScreen, QPixmap, QPainter, QPen, QColor
 import pyautogui
-from PIL import Image
-from pyzbar.pyzbar import decode
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from pyzbar.pyzbar import decode, ZBarSymbol
 import numpy as np
 import io
+import cv2
 
 class QRCodeReader(QMainWindow):
     def __init__(self):
@@ -55,27 +56,172 @@ class QRCodeReader(QMainWindow):
         self.capture_window.capture_completed.connect(self.process_capture)
         self.capture_window.show()
 
+    def find_qr_code(self, image):
+        """QRコードの位置検出パターンを探して、より正確にQRコードを特定"""
+        # グレースケール変換
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image.copy()
+        
+        # 二値化（複数の閾値で試行）
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # 輪郭検出
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # QRコードの候補を探す
+        qr_candidates = []
+        for contour in contours:
+            # 輪郭の面積が小さすぎる場合はスキップ
+            if cv2.contourArea(contour) < 100:
+                continue
+                
+            # 輪郭を近似
+            peri = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.04 * peri, True)
+            
+            # 四角形の場合
+            if len(approx) == 4:
+                # アスペクト比を計算
+                rect = cv2.minAreaRect(contour)
+                width = rect[1][0]
+                height = rect[1][1]
+                aspect_ratio = max(width, height) / (min(width, height) + 1e-6)
+                
+                # QRコードは通常、ほぼ正方形（アスペクト比が1に近い）
+                if 0.8 <= aspect_ratio <= 1.2:
+                    qr_candidates.append((contour, cv2.contourArea(contour)))
+        
+        # 面積でソート
+        qr_candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        return qr_candidates[0][0] if qr_candidates else None
+
+    def preprocess_image(self, image):
+        """画像の前処理を行い、最適な結果を返す"""
+        # 画像の品質を評価する関数
+        def evaluate_quality(img):
+            # エッジの鮮明さを評価
+            edges = cv2.Canny(img, 100, 200)
+            edge_score = np.sum(edges) / (img.shape[0] * img.shape[1])
+            
+            # コントラストを評価
+            contrast = np.std(img)
+            
+            # ノイズを評価（局所的な分散）
+            noise = cv2.Laplacian(img, cv2.CV_64F).var()
+            
+            return edge_score * contrast / (noise + 1e-6)
+
+        # グレースケール変換
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image.copy()
+
+        # 画像の品質を改善する処理を順番に適用
+        best_quality = 0
+        best_image = gray.copy()
+        
+        # 1. ガウシアンブラーでノイズ除去
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        quality = evaluate_quality(blurred)
+        if quality > best_quality:
+            best_quality = quality
+            best_image = blurred
+
+        # 2. アンシャープマスクでエッジ強調
+        gaussian = cv2.GaussianBlur(gray, (0, 0), 3)
+        unsharp = cv2.addWeighted(gray, 1.5, gaussian, -0.5, 0)
+        quality = evaluate_quality(unsharp)
+        if quality > best_quality:
+            best_quality = quality
+            best_image = unsharp
+
+        # 3. 適応的二値化
+        binary = cv2.adaptiveThreshold(
+            best_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 11, 2
+        )
+        quality = evaluate_quality(binary)
+        if quality > best_quality:
+            best_quality = quality
+            best_image = binary
+
+        return best_image
+
     def process_capture(self, rect):
         if rect:
             # 選択された領域の画像を取得
             cropped = self.screenshot.copy(rect)
-            # QPixmap → バイト配列（PNG形式）→ PIL.Image
             byte_array = QByteArray()
             buffer = QBuffer(byte_array)
             buffer.open(QBuffer.WriteOnly)
             cropped.save(buffer, 'PNG')
             pil_image = Image.open(io.BytesIO(byte_array.data()))
-            # QRコードをデコード
-            decoded_objects = decode(pil_image)
+            np_image = np.array(pil_image.convert('RGB'))
             
-            if decoded_objects:
-                # QRコードが見つかった場合
-                result = decoded_objects[0].data.decode('utf-8')
-                self.result_text.setText(result)
-                self.status_label.setText('QRコードを検出しました')
+            # QRコードの位置を特定
+            qr_contour = self.find_qr_code(np_image)
+            
+            if qr_contour is not None:
+                # QRコードの領域を取得
+                x, y, w, h = cv2.boundingRect(qr_contour)
+                # 余白を追加（20%）
+                padding = int(max(w, h) * 0.2)
+                x = max(0, x - padding)
+                y = max(0, y - padding)
+                w = min(np_image.shape[1] - x, w + 2 * padding)
+                h = min(np_image.shape[0] - y, h + 2 * padding)
+                
+                # 領域を切り出し
+                qr_region = np_image[y:y+h, x:x+w]
+                
+                # 画像の前処理
+                processed_image = self.preprocess_image(qr_region)
+                
+                # 回転補正
+                rect = cv2.minAreaRect(qr_contour)
+                angle = rect[2]
+                if angle < -45:
+                    angle += 90
+                
+                center = (w // 2, h // 2)
+                rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+                rotated_image = cv2.warpAffine(processed_image, rotation_matrix, 
+                                             (w, h), flags=cv2.INTER_CUBIC)
+                
+                # QRコードの読み取りを試行
+                pil_image = Image.fromarray(rotated_image)
+                decoded_objects = decode(pil_image, symbols=[ZBarSymbol.QRCODE])
+                
+                if decoded_objects:
+                    decoded_result = decoded_objects[0].data.decode('utf-8')
+                    self.result_text.setText(decoded_result)
+                    self.status_label.setText('QRコードを検出しました')
+                else:
+                    # 読み取りに失敗した場合、元の画像全体でも試行
+                    pil_image = Image.fromarray(np_image)
+                    decoded_objects = decode(pil_image, symbols=[ZBarSymbol.QRCODE])
+                    if decoded_objects:
+                        decoded_result = decoded_objects[0].data.decode('utf-8')
+                        self.result_text.setText(decoded_result)
+                        self.status_label.setText('QRコードを検出しました')
+                    else:
+                        self.result_text.clear()
+                        self.status_label.setText('QRコードが見つかりませんでした')
             else:
-                self.result_text.clear()
-                self.status_label.setText('QRコードが見つかりませんでした')
+                # QRコードの位置が特定できない場合、元の画像全体で試行
+                pil_image = Image.fromarray(np_image)
+                decoded_objects = decode(pil_image, symbols=[ZBarSymbol.QRCODE])
+                if decoded_objects:
+                    decoded_result = decoded_objects[0].data.decode('utf-8')
+                    self.result_text.setText(decoded_result)
+                    self.status_label.setText('QRコードを検出しました')
+                else:
+                    self.result_text.clear()
+                    self.status_label.setText('QRコードが見つかりませんでした')
         
         self.show()  # メインウィンドウを再表示
 
