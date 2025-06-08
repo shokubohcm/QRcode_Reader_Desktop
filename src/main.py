@@ -2,7 +2,8 @@ import sys
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, 
                            QVBoxLayout, QWidget, QLabel, QTextEdit)
 from PySide6.QtCore import Qt, QRect, Signal, QBuffer, QByteArray, QUrl
-from PySide6.QtGui import QScreen, QPixmap, QPainter, QPen, QColor, QClipboard, QDesktopServices
+from PySide6.QtGui import (QScreen, QPixmap, QPainter, QPen, QColor, QClipboard, 
+                        QDesktopServices, QTextCursor, QTextCharFormat, QCursor)
 import pyautogui
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pyzbar.pyzbar import decode, ZBarSymbol
@@ -37,14 +38,19 @@ class QRCodeReader(QMainWindow):
         self.result_text = QTextEdit()
         self.result_text.setReadOnly(True)
         self.result_text.setPlaceholderText('QRコードの読み取り結果がここに表示されます')
-        self.result_text.setMouseTracking(True)  # マウスイベントを有効化
-        self.result_text.mousePressEvent = self.handle_result_click  # クリックイベントをオーバーライド
+        self.result_text.setMouseTracking(True)
+        self.result_text.mousePressEvent = self.handle_result_click
+        self.result_text.cursorPositionChanged.connect(self.handle_cursor_position_change)
         layout.addWidget(self.result_text)
+
+        # 現在のURLの位置を保持する変数
+        self.current_url_range = None
+        self.is_hovering_url = False
 
         # コピーボタン
         self.copy_btn = QPushButton('結果をコピー', self)
         self.copy_btn.clicked.connect(self.copy_to_clipboard)
-        self.copy_btn.setEnabled(False)  # 初期状態は無効
+        self.copy_btn.setEnabled(False)
         layout.addWidget(self.copy_btn)
 
         # ステータスラベル
@@ -179,20 +185,104 @@ class QRCodeReader(QMainWindow):
 
     def handle_result_click(self, event):
         """結果テキストがクリックされたときの処理"""
+        cursor = self.result_text.cursorForPosition(event.pos())
         text = self.result_text.toPlainText()
-        if text and self.is_valid_url(text):
-            # URLをブラウザで開く
-            QDesktopServices.openUrl(QUrl(text))
-            self.status_label.setText('ブラウザでURLを開きました')
-        else:
-            # URLでない場合は通常のクリックイベントを処理
-            super().mousePressEvent(event)
+        
+        # クリックされた位置の文字を含むURLを探す
+        url_pattern = re.compile(
+            r'(https?|ftp)://'  # http://, https://, ftp://
+            r'([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+'  # ドメイン
+            r'[a-zA-Z]{2,}'  # TLD
+            r'(/[a-zA-Z0-9-._~:/?#[\]@!$&\'()*+,;=]*)?'  # パス、クエリ、フラグメント
+        )
+        
+        # クリック位置がURL上かどうかを確認
+        click_pos = cursor.position()
+        for match in url_pattern.finditer(text):
+            start, end = match.span()
+            if start <= click_pos <= end:
+                # URL上でクリックされた場合のみURLを開く
+                url = text[start:end]
+                QDesktopServices.openUrl(QUrl(url))
+                self.status_label.setText('ブラウザでURLを開きました')
+                return
+        
+        # URL上でない場合は通常のクリックイベントを処理
+        super().mousePressEvent(event)
+
+    def handle_cursor_position_change(self):
+        """カーソル位置が変更されたときの処理"""
+        cursor = self.result_text.textCursor()
+        text = self.result_text.toPlainText()
+        
+        # カーソル位置の文字を含むURLを探す
+        url_pattern = re.compile(
+            r'(https?|ftp)://'  # http://, https://, ftp://
+            r'([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+'  # ドメイン
+            r'[a-zA-Z]{2,}'  # TLD
+            r'(/[a-zA-Z0-9-._~:/?#[\]@!$&\'()*+,;=]*)?'  # パス、クエリ、フラグメント
+        )
+        
+        # テキスト内のすべてのURLを検索
+        cursor_pos = cursor.position()
+        for match in url_pattern.finditer(text):
+            start, end = match.span()
+            if start <= cursor_pos <= end:
+                # カーソルがURL上にある場合
+                if not self.is_hovering_url or self.current_url_range != (start, end):
+                    self.current_url_range = (start, end)
+                    self.is_hovering_url = True
+                    self.apply_url_style(start, end)
+                    # テキスト選択カーソルに変更
+                    self.result_text.setCursor(QCursor(Qt.IBeamCursor))
+                    # URL全体を選択状態にする
+                    cursor.setPosition(start)
+                    cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, end - start)
+                    self.result_text.setTextCursor(cursor)
+                    return
+                return
+        
+        # カーソルがURL上にない場合
+        if self.is_hovering_url:
+            self.is_hovering_url = False
+            self.current_url_range = None
+            self.reset_text_style()
+            self.result_text.setCursor(QCursor(Qt.IBeamCursor))
+            # 選択を解除
+            cursor.clearSelection()
+            self.result_text.setTextCursor(cursor)
+
+    def apply_url_style(self, start, end):
+        """URLにスタイルを適用"""
+        cursor = self.result_text.textCursor()
+        format = QTextCharFormat()
+        format.setForeground(QColor(0, 120, 215))  # 水色（Windows の標準的なリンクカラー）
+        format.setFontUnderline(True)  # 下線
+        
+        # スタイルを適用
+        cursor.setPosition(start)
+        cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, end - start)
+        cursor.mergeCharFormat(format)
+
+    def reset_text_style(self):
+        """テキストのスタイルをリセット"""
+        cursor = self.result_text.textCursor()
+        format = QTextCharFormat()
+        format.setForeground(QColor(0, 0, 0))  # 黒色
+        format.setFontUnderline(False)  # 下線を削除
+        
+        # スタイルをリセット
+        cursor.select(QTextCursor.Document)
+        cursor.mergeCharFormat(format)
+        cursor.clearSelection()
 
     def process_capture(self, rect):
         if rect:
             # 結果をクリア（新しいキャプチャの開始時に必ずクリア）
             self.result_text.clear()
-            self.copy_btn.setEnabled(False)  # コピーボタンを無効化
+            self.copy_btn.setEnabled(False)
+            self.current_url_range = None
+            self.is_hovering_url = False
             
             # 選択された領域の画像を取得
             cropped = self.screenshot.copy(rect)
@@ -260,12 +350,14 @@ class QRCodeReader(QMainWindow):
                 self.result_text.setText(decoded_result)
                 if self.is_valid_url(decoded_result):
                     self.status_label.setText('QRコードを検出しました（URLをクリックで開けます）')
+                    # URLのスタイルを初期設定
+                    self.apply_url_style(0, len(decoded_result))
                 else:
                     self.status_label.setText('QRコードを検出しました')
-                self.copy_btn.setEnabled(True)  # コピーボタンを有効化
+                self.copy_btn.setEnabled(True)
             else:
                 self.status_label.setText('QRコードが見つかりませんでした')
-                self.copy_btn.setEnabled(False)  # コピーボタンを無効化
+                self.copy_btn.setEnabled(False)
         
         self.show()  # メインウィンドウを再表示
 
