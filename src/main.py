@@ -2,7 +2,7 @@ import sys
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, 
                            QVBoxLayout, QWidget, QLabel, QTextEdit)
 from PySide6.QtCore import Qt, QRect, Signal, QBuffer, QByteArray
-from PySide6.QtGui import QScreen, QPixmap, QPainter, QPen, QColor
+from PySide6.QtGui import QScreen, QPixmap, QPainter, QPen, QColor, QClipboard
 import pyautogui
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pyzbar.pyzbar import decode, ZBarSymbol
@@ -37,6 +37,12 @@ class QRCodeReader(QMainWindow):
         self.result_text.setReadOnly(True)
         self.result_text.setPlaceholderText('QRコードの読み取り結果がここに表示されます')
         layout.addWidget(self.result_text)
+
+        # コピーボタン
+        self.copy_btn = QPushButton('結果をコピー', self)
+        self.copy_btn.clicked.connect(self.copy_to_clipboard)
+        self.copy_btn.setEnabled(False)  # 初期状態は無効
+        layout.addWidget(self.copy_btn)
 
         # ステータスラベル
         self.status_label = QLabel('準備完了')
@@ -151,10 +157,17 @@ class QRCodeReader(QMainWindow):
 
         return best_image
 
+    def copy_to_clipboard(self):
+        """結果をクリップボードにコピー"""
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.result_text.toPlainText())
+        self.status_label.setText('クリップボードにコピーしました')
+
     def process_capture(self, rect):
         if rect:
             # 結果をクリア（新しいキャプチャの開始時に必ずクリア）
             self.result_text.clear()
+            self.copy_btn.setEnabled(False)  # コピーボタンを無効化
             
             # 選択された領域の画像を取得
             cropped = self.screenshot.copy(rect)
@@ -221,8 +234,10 @@ class QRCodeReader(QMainWindow):
             if decoded_result:
                 self.result_text.setText(decoded_result)
                 self.status_label.setText('QRコードを検出しました')
+                self.copy_btn.setEnabled(True)  # コピーボタンを有効化
             else:
                 self.status_label.setText('QRコードが見つかりませんでした')
+                self.copy_btn.setEnabled(False)  # コピーボタンを無効化
         
         self.show()  # メインウィンドウを再表示
 
