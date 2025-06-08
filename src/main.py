@@ -1,14 +1,15 @@
 import sys
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPushButton, 
                            QVBoxLayout, QWidget, QLabel, QTextEdit)
-from PySide6.QtCore import Qt, QRect, Signal, QBuffer, QByteArray
-from PySide6.QtGui import QScreen, QPixmap, QPainter, QPen, QColor, QClipboard
+from PySide6.QtCore import Qt, QRect, Signal, QBuffer, QByteArray, QUrl
+from PySide6.QtGui import QScreen, QPixmap, QPainter, QPen, QColor, QClipboard, QDesktopServices
 import pyautogui
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pyzbar.pyzbar import decode, ZBarSymbol
 import numpy as np
 import io
 import cv2
+import re
 
 class QRCodeReader(QMainWindow):
     def __init__(self):
@@ -36,6 +37,8 @@ class QRCodeReader(QMainWindow):
         self.result_text = QTextEdit()
         self.result_text.setReadOnly(True)
         self.result_text.setPlaceholderText('QRコードの読み取り結果がここに表示されます')
+        self.result_text.setMouseTracking(True)  # マウスイベントを有効化
+        self.result_text.mousePressEvent = self.handle_result_click  # クリックイベントをオーバーライド
         layout.addWidget(self.result_text)
 
         # コピーボタン
@@ -163,6 +166,28 @@ class QRCodeReader(QMainWindow):
         clipboard.setText(self.result_text.toPlainText())
         self.status_label.setText('クリップボードにコピーしました')
 
+    def is_valid_url(self, text):
+        """URLかどうかを判定する"""
+        # URLのパターン（http://, https://, ftp://で始まる文字列）
+        url_pattern = re.compile(
+            r'^(https?|ftp)://'  # http://, https://, ftp://
+            r'([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+'  # ドメイン
+            r'[a-zA-Z]{2,}'  # TLD
+            r'(/[a-zA-Z0-9-._~:/?#[\]@!$&\'()*+,;=]*)?$'  # パス、クエリ、フラグメント
+        )
+        return bool(url_pattern.match(text))
+
+    def handle_result_click(self, event):
+        """結果テキストがクリックされたときの処理"""
+        text = self.result_text.toPlainText()
+        if text and self.is_valid_url(text):
+            # URLをブラウザで開く
+            QDesktopServices.openUrl(QUrl(text))
+            self.status_label.setText('ブラウザでURLを開きました')
+        else:
+            # URLでない場合は通常のクリックイベントを処理
+            super().mousePressEvent(event)
+
     def process_capture(self, rect):
         if rect:
             # 結果をクリア（新しいキャプチャの開始時に必ずクリア）
@@ -233,7 +258,10 @@ class QRCodeReader(QMainWindow):
             # 最終的な結果の表示
             if decoded_result:
                 self.result_text.setText(decoded_result)
-                self.status_label.setText('QRコードを検出しました')
+                if self.is_valid_url(decoded_result):
+                    self.status_label.setText('QRコードを検出しました（URLをクリックで開けます）')
+                else:
+                    self.status_label.setText('QRコードを検出しました')
                 self.copy_btn.setEnabled(True)  # コピーボタンを有効化
             else:
                 self.status_label.setText('QRコードが見つかりませんでした')
