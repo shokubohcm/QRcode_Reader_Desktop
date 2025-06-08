@@ -1,0 +1,43 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Cursor Rules for Screen QR Code Reader
+Project Goal
+Create a simple command-line Python script that allows a user to capture a portion of their screen using a mouse drag, and then decodes any QR code found within that selection, printing the result to the console.
+
+File Structure
+main.py: The main and only script file containing all the logic.
+requirements.txt: A file listing the necessary Python libraries.
+Core Logic in main.py
+Import necessary libraries: pyautogui, PIL.Image, and pyzbar.pyzbar.decode.
+Implement Screen Capture Functionality:
+Use pyautogui to capture the mouse events for dragging.
+Create a function, let's call it capture_screen_area().
+This function should prompt the user to drag their mouse.
+It will record the starting (on mouse down) and ending (on mouse up) coordinates.
+Calculate the region (left, top, width, height) from these coordinates.
+Use pyautogui.screenshot(region=...) to capture just the selected area.
+The function should return the captured image object (a Pillow Image).
+Implement QR Code Decoding:
+Create a function, decode_qr_from_image(image_obj).
+This function takes a Pillow Image object as input.
+Use pyzbar.pyzbar.decode(image_obj) to find and decode QR codes.
+If a QR code is found, extract the data, decode it from bytes to a UTF-8 string.
+Return the decoded string. If not found, return None.
+Main Execution Block:
+Use an if __name__ == "__main__": block.
+Print a user-friendly instruction message to the console (e.g., "Please drag your mouse to select the QR code area...").
+Call capture_screen_area() to get the image of the selected region.
+If an image is successfully captured, pass it to decode_qr_from_image().
+Check the return value:
+If a URL/text is returned, print it clearly to the console (e.g., Found QR Code: [decoded_text]).
+If None is returned, print an error message (e.g., "No QR code found in the selected area.").
+Handle potential errors gracefully, such as the user aborting the drag.
+requirements.txt Content
+pyautogui
+Pillow
+pyzbar
+
+Use these rules to guide the development. Ensure the code is clean, well-commented, and follows this logic. Start with main.py
