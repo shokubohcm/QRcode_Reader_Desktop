@@ -153,6 +153,9 @@ class QRCodeReader(QMainWindow):
 
     def process_capture(self, rect):
         if rect:
+            # 結果をクリア（新しいキャプチャの開始時に必ずクリア）
+            self.result_text.clear()
+            
             # 選択された領域の画像を取得
             cropped = self.screenshot.copy(rect)
             byte_array = QByteArray()
@@ -164,6 +167,8 @@ class QRCodeReader(QMainWindow):
             
             # QRコードの位置を特定
             qr_contour = self.find_qr_code(np_image)
+            
+            decoded_result = None  # 結果を保持する変数
             
             if qr_contour is not None:
                 # QRコードの領域を取得
@@ -198,30 +203,26 @@ class QRCodeReader(QMainWindow):
                 
                 if decoded_objects:
                     decoded_result = decoded_objects[0].data.decode('utf-8')
-                    self.result_text.setText(decoded_result)
-                    self.status_label.setText('QRコードを検出しました')
                 else:
                     # 読み取りに失敗した場合、元の画像全体でも試行
                     pil_image = Image.fromarray(np_image)
                     decoded_objects = decode(pil_image, symbols=[ZBarSymbol.QRCODE])
                     if decoded_objects:
                         decoded_result = decoded_objects[0].data.decode('utf-8')
-                        self.result_text.setText(decoded_result)
-                        self.status_label.setText('QRコードを検出しました')
-                    else:
-                        self.result_text.clear()
-                        self.status_label.setText('QRコードが見つかりませんでした')
+            
             else:
                 # QRコードの位置が特定できない場合、元の画像全体で試行
                 pil_image = Image.fromarray(np_image)
                 decoded_objects = decode(pil_image, symbols=[ZBarSymbol.QRCODE])
                 if decoded_objects:
                     decoded_result = decoded_objects[0].data.decode('utf-8')
-                    self.result_text.setText(decoded_result)
-                    self.status_label.setText('QRコードを検出しました')
-                else:
-                    self.result_text.clear()
-                    self.status_label.setText('QRコードが見つかりませんでした')
+            
+            # 最終的な結果の表示
+            if decoded_result:
+                self.result_text.setText(decoded_result)
+                self.status_label.setText('QRコードを検出しました')
+            else:
+                self.status_label.setText('QRコードが見つかりませんでした')
         
         self.show()  # メインウィンドウを再表示
 
