@@ -21,7 +21,7 @@ class QRCodeReader(QMainWindow):
 
     def initUI(self):
         self.setWindowTitle('QRコードリーダー')
-        self.setGeometry(100, 100, 600, 400)
+        self.setGeometry(0, 0, 300, 200)  # 左上隅に幅300, 高さ200で表示
 
         # メインウィジェットとレイアウトの設定
         main_widget = QWidget()
